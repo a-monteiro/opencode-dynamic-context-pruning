@@ -21,6 +21,24 @@ The projection reads that asset's MIME type and inline data URL or remote URL wi
 Restoration retains the original media object and provider metadata.
 Compaction leaves `event.options`, including prepopulated `maxTokens`, unchanged.
 
+## Reply cleanup and message-id injection
+
+Ported upstream PR #634. `experimental.text.complete` now cleans the streamed reply
+with the session's ID format, so compact `@N@` refs a model echoes are removed
+instead of surviving the XML-only rules (#632). Trailing runs of degenerate tag
+debris such as `<<`, a bare `<` or `<m0477` are also stripped (#562); the rule is
+anchored to the end of the reply and needs two or more bracket-only lines, so a
+lone bracket in prose, markdown or code is untouched.
+
+Upstream issue #614 is present in this vendored copy through completed tool parts.
+Injection appends the id tag to a tool output, and cleanup strips the tag but keeps
+the newline that precedes it. Re-appending without normalizing therefore adds one
+newline to every mid-conversation completed tool output on each request, so prior
+messages never stay byte-identical and the prompt prefix cache cannot hold.
+`appendToToolPart` now trims trailing newlines before appending, matching
+`appendToTextPart`. The streaming and compression-rebuild mechanisms named in #614
+did not reproduce here; text parts, XML refs and compact refs already round-trip.
+
 ## Checks
 
 Run from the vendored copy in the dotfiles repo:
