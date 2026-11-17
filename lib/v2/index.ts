@@ -11,6 +11,7 @@ import {
     ensureSessionInitialized,
     checkSession,
     saveSessionState,
+    loadSessionState,
     syncToolCache,
     type SessionState,
 } from "../state"
@@ -64,6 +65,7 @@ export async function setup(ctx: Plugin.Context) {
     )
     const sessions = new Map<string, SessionState>()
     const queues = new Map<string, Promise<unknown>>()
+    const exposedEpochs = new Map<string, number>()
     const limits = new Map<string, number>()
     const aliases: Record<string, string> = {
         task: "subagent",
@@ -115,7 +117,11 @@ export async function setup(ctx: Plugin.Context) {
         },
     }
 
-    async function load(sessionID: string, agentID?: string) {
+    async function load(sessionID: string, agentID?: string, rejectStaleRefs = false) {
+        const previousEpoch = rejectStaleRefs
+            ? exposedEpochs.get(sessionID) ?? (await loadSessionState(sessionID, logger))?.lastCompaction ?? 0
+            : undefined
+        if (previousEpoch !== undefined) exposedEpochs.set(sessionID, previousEpoch)
         const [session, entries] = await Promise.all([
             ctx.session.get({ sessionID }),
             ctx.session.context({ sessionID }),
@@ -141,6 +147,12 @@ export async function setup(ctx: Plugin.Context) {
             config.manualMode.enabled,
         )
         await checkSession(client, state, logger, messages, config.manualMode.enabled)
+        if (previousEpoch !== undefined && state.lastCompaction > previousEpoch) {
+            throw new Error("Session compacted since message refs were exposed. Wait for a fresh model turn before compressing.")
+        }
+        if (rejectStaleRefs && state.messageIds.byRef.size === 0) {
+            throw new Error("Message refs unavailable. Wait for a fresh model turn before compressing.")
+        }
         const rule = [...agent.permissions, ...(session.permissions ?? [])].findLast(
             (rule) => matchesGlob("compress", rule.action) && matchesGlob("*", rule.resource),
         )
@@ -219,6 +231,7 @@ export async function setup(ctx: Plugin.Context) {
                 injectMessageIds(state, config, view.messages, priorities)
                 applyPendingManualTrigger(state, view.messages, logger)
                 event.messages = view.restore()
+                await saveSessionState(state, logger)
                 const system = { system: event.system.map((part) => part.text) }
                 await createSystemPromptHandler(
                     state,
@@ -238,6 +251,7 @@ export async function setup(ctx: Plugin.Context) {
                     text,
                 }))
                 await logger.saveContext(event.sessionID, view.messages)
+                if (kind === "context") exposedEpochs.set(event.sessionID, state.lastCompaction)
             }),
         )
 
@@ -255,7 +269,7 @@ export async function setup(ctx: Plugin.Context) {
                 options: { codemode: false, permission: "compress" },
                 execute: (input, context) =>
                     serial(context.sessionID, async () => {
-                        const { state } = await load(context.sessionID, context.agent)
+                        const { state } = await load(context.sessionID, context.agent, true)
                         allowed(state)
                         const started = Date.now()
                         const legacy = define(state)
@@ -366,6 +380,7 @@ export async function setup(ctx: Plugin.Context) {
     logger.info("DCP V2 initialized")
     return () => {
         sessions.clear()
+        exposedEpochs.clear()
         limits.clear()
     }
 }

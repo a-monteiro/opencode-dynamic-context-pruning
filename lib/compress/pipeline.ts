@@ -1,5 +1,5 @@
 import type { WithParts } from "../state"
-import { ensureSessionInitialized, refreshManualMode } from "../state"
+import { checkSession, refreshManualMode } from "../state"
 import { saveSessionState } from "../state/persistence"
 import { assignMessageRefs } from "../message-ids"
 import { isIgnoredUserMessage } from "../messages/query"
@@ -58,14 +58,17 @@ export async function prepareSession(
 
     const rawMessages = await fetchSessionMessages(ctx.client, toolCtx.sessionID)
 
-    await ensureSessionInitialized(
+    const previousEpoch = ctx.state.lastCompaction
+    await checkSession(
         ctx.client,
         ctx.state,
-        toolCtx.sessionID,
         ctx.logger,
         rawMessages,
         ctx.config.manualMode.enabled,
     )
+    if (ctx.state.lastCompaction > previousEpoch) {
+        throw new Error("Session compacted since message refs were exposed. Wait for a fresh model turn before compressing.")
+    }
 
     assignMessageRefs(ctx.state, rawMessages)
 
