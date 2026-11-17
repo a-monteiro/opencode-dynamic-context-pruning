@@ -1,0 +1,13 @@
+{
+    "compilerOptions": {
+        "target": "ES2023",
+        "module": "ESNext",
+        "moduleResolution": "Bundler",
+        "strict": true,
+        "skipLibCheck": true,
+        "noEmit": true,
+        "types": ["node"]
+    },
+    "include": ["index.ts", "lib/**/*.ts", "../../plugins-v2/dcp/index.ts"],
+    "exclude": ["lib/tui/**", "lib/v2/theme.ts"]
+}
