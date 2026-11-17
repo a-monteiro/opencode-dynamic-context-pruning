@@ -30,6 +30,8 @@ import {
 import { countTokens } from "../token-utils"
 import { matchesGlob } from "../protected-patterns"
 import { history, project } from "./messages"
+import { stripReminderBlocksFromMessages } from "./reminder-cleanup"
+import { filterChatCompletionsSse } from "./sse-reminder"
 import { analyzeContextTokens } from "../commands/context"
 import { buildStatsReport } from "../commands/stats"
 import { rpc } from "./rpc"
@@ -203,6 +205,7 @@ export async function setup(ctx: Plugin.Context) {
                     agent: event.agent,
                     model: event.model,
                 })
+                stripReminderBlocksFromMessages(view.messages)
                 stripHallucinations(view.messages, state.idFormat)
                 assignMessageRefs(state, view.messages)
                 // Compaction may select only a prefix; block origins can be in the retained tail.
@@ -255,6 +258,18 @@ export async function setup(ctx: Plugin.Context) {
                 if (kind === "context") exposedEpochs.set(event.sessionID, state.lastCompaction)
             }),
         )
+
+    await ctx.session.hook(
+        "http.response",
+        (event) => {
+            if (event.kind !== "primary" || event.model.providerID !== "openrouter" ||
+                event.request.method !== "POST" ||
+                !new URL(event.request.url).pathname.endsWith("/chat/completions")) return
+            const filtered = filterChatCompletionsSse(event.response)
+            if (filtered) event.response = filtered
+        },
+        { providerID: "openrouter" },
+    )
 
     if (config.compress.permission !== "deny") {
         const define = (state: SessionState): ToolDefinition =>
