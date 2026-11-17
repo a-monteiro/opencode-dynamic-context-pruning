@@ -247,6 +247,32 @@ function injectAnchoredNudge(message: WithParts, nudgeText: string): void {
     }
 }
 
+export function findInProgressAssistantId(messages: WithParts[]): string | undefined {
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const message = messages[i]
+        if (message.info.role !== "assistant") {
+            continue
+        }
+
+        const completed = (message.info.time as { completed?: unknown } | undefined)?.completed
+        return completed === undefined ? message.info.id : undefined
+    }
+
+    return undefined
+}
+
+function resolveNudgeTarget(
+    message: WithParts,
+    inProgressAssistantId: string | undefined,
+    redirect: WithParts | null,
+): WithParts | null {
+    if (inProgressAssistantId && message.info.id === inProgressAssistantId) {
+        return redirect
+    }
+
+    return message
+}
+
 function collectAnchoredMessages(
     anchorMessageIds: Set<string>,
     messages: WithParts[],
@@ -292,14 +318,19 @@ function applyRangeModeAnchoredNudge(
     messages: WithParts[],
     baseNudgeText: string,
     compressedBlockGuidance: string,
+    inProgressAssistantId?: string,
 ): void {
     const nudgeText = appendGuidanceToDcpTag(baseNudgeText, compressedBlockGuidance)
     if (!nudgeText.trim()) {
         return
     }
 
+    const redirect = inProgressAssistantId ? getLastUserMessage(messages) : null
     for (const { message } of collectAnchoredMessages(anchorMessageIds, messages)) {
-        injectAnchoredNudge(message, nudgeText)
+        const target = resolveNudgeTarget(message, inProgressAssistantId, redirect)
+        if (target) {
+            injectAnchoredNudge(target, nudgeText)
+        }
     }
 }
 
@@ -308,7 +339,9 @@ function applyMessageModeAnchoredNudge(
     messages: WithParts[],
     baseNudgeText: string,
     compressionPriorities?: CompressionPriorityMap,
+    inProgressAssistantId?: string,
 ): void {
+    const redirect = inProgressAssistantId ? getLastUserMessage(messages) : null
     for (const { message, index } of collectAnchoredMessages(anchorMessageIds, messages)) {
         const priorityGuidance = buildMessagePriorityGuidance(
             messages,
@@ -317,7 +350,10 @@ function applyMessageModeAnchoredNudge(
             MESSAGE_MODE_NUDGE_PRIORITY,
         )
         const nudgeText = appendGuidanceToDcpTag(baseNudgeText, priorityGuidance)
-        injectAnchoredNudge(message, nudgeText)
+        const target = resolveNudgeTarget(message, inProgressAssistantId, redirect)
+        if (target) {
+            injectAnchoredNudge(target, nudgeText)
+        }
     }
 }
 
@@ -327,8 +363,12 @@ export function applyAnchoredNudges(
     messages: WithParts[],
     prompts: RuntimePrompts,
     compressionPriorities?: CompressionPriorityMap,
+    guardInProgressAssistant = false,
 ): void {
     const turnNudgeAnchors = collectTurnNudgeAnchors(state, config, messages)
+    const inProgressAssistantId = guardInProgressAssistant
+        ? findInProgressAssistantId(messages)
+        : undefined
 
     if (config.compress.mode === "message") {
         applyMessageModeAnchoredNudge(
@@ -336,18 +376,21 @@ export function applyAnchoredNudges(
             messages,
             prompts.contextLimitNudge,
             compressionPriorities,
+            inProgressAssistantId,
         )
         applyMessageModeAnchoredNudge(
             turnNudgeAnchors,
             messages,
             prompts.turnNudge,
             compressionPriorities,
+            inProgressAssistantId,
         )
         applyMessageModeAnchoredNudge(
             state.nudges.iterationNudgeAnchors,
             messages,
             prompts.iterationNudge,
             compressionPriorities,
+            inProgressAssistantId,
         )
         return
     }
@@ -358,17 +401,20 @@ export function applyAnchoredNudges(
         messages,
         prompts.contextLimitNudge,
         compressedBlockGuidance,
+        inProgressAssistantId,
     )
     applyRangeModeAnchoredNudge(
         turnNudgeAnchors,
         messages,
         prompts.turnNudge,
         compressedBlockGuidance,
+        inProgressAssistantId,
     )
     applyRangeModeAnchoredNudge(
         state.nudges.iterationNudgeAnchors,
         messages,
         prompts.iterationNudge,
         compressedBlockGuidance,
+        inProgressAssistantId,
     )
 }

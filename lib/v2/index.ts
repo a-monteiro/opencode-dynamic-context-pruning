@@ -227,6 +227,7 @@ export async function setup(ctx: Plugin.Context) {
                     prompts.getRuntimePrompts(),
                     priorities,
                     kind === "context",
+                    true,
                 )
                 injectMessageIds(state, config, view.messages, priorities)
                 applyPendingManualTrigger(state, view.messages, logger)
