@@ -3,9 +3,6 @@
     "name": "@tarquinen/opencode-dcp",
     "version": "3.2.0",
     "type": "module",
-    "workspaces": [
-        "tests/logger"
-    ],
     "description": "OpenCode plugin that optimizes token usage by pruning obsolete tool outputs from conversation context",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
