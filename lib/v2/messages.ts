@@ -10,11 +10,17 @@ const emptyUsage = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write:
 
 function info(id: string, role: string, session: Session, entry?: History[number]) {
     const model = entry?.type === "assistant" ? entry.model : session.model
+    // One V2 assistant message spans several steps; the store clears completion
+    // while a step is running, so an unset completed marks the in-progress reply.
+    const completed = entry?.type === "assistant" ? entry.time.completed : undefined
     return {
         id,
         role,
         sessionID: session.id,
-        time: { created: entry?.time.created ?? 0 },
+        time: {
+            created: entry?.time.created ?? 0,
+            ...(completed !== undefined ? { completed } : {}),
+        },
         agent: entry?.type === "assistant" ? entry.agent : session.agent,
         model: { providerID: model?.providerID, modelID: model?.id, variant: model?.variant },
         providerID: model?.providerID,

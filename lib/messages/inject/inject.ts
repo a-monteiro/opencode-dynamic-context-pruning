@@ -38,6 +38,7 @@ export const injectCompressNudges = (
     prompts: RuntimePrompts,
     compressionPriorities?: CompressionPriorityMap,
     createAnchors = true,
+    guardInProgressAssistant = false,
 ): void => {
     if (compressPermission(state, config) === "deny") {
         return
@@ -48,7 +49,14 @@ export const injectCompressNudges = (
     }
 
     if (!createAnchors) {
-        applyAnchoredNudges(state, config, messages, prompts, compressionPriorities)
+        applyAnchoredNudges(
+            state,
+            config,
+            messages,
+            prompts,
+            compressionPriorities,
+            guardInProgressAssistant,
+        )
         return
     }
 
@@ -141,7 +149,14 @@ export const injectCompressNudges = (
         }
     }
 
-    applyAnchoredNudges(state, config, messages, prompts, compressionPriorities)
+    applyAnchoredNudges(
+        state,
+        config,
+        messages,
+        prompts,
+        compressionPriorities,
+        guardInProgressAssistant,
+    )
 
     if (anchorsChanged) {
         void saveSessionState(state, logger)

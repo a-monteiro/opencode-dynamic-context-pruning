@@ -39,6 +39,14 @@ messages never stay byte-identical and the prompt prefix cache cannot hold.
 `appendToTextPart`. The streaming and compression-rebuild mechanisms named in #614
 did not reproduce here; text parts, XML refs and compact refs already round-trip.
 
+## In-progress assistant messages
+
+A V2 assistant message spans several steps, so the store clears its completion
+time until the final step lands. Nudges anchored on that message were injected
+into the reply as it streamed, and the model then saw them as part of its own
+output. The projection now carries the store's completion time, and nudge
+injection redirects a target that is still in progress to the last user message.
+
 ## Checks
 
 Run from the vendored copy in the dotfiles repo:
