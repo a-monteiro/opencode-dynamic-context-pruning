@@ -114,6 +114,19 @@ buffering runs or info strings. Closing runs must use the same character, be at
 least as long as the opener, and end with only whitespace or a line boundary.
 Four-tick examples containing triple fences and closing-looking lines with suffixes stay literal.
 
+## One-shot generation hook
+
+OpenCode's built-in request plugins hook `context`, `compaction` and `generate` together.
+Upstream DCP skipped `generate`, so `session.generate` requests (cache warming, `/btw`)
+sent raw history and system prompt. The shared prompt-cache prefix with real turns then
+ended after the tools and base system prompt, and warming only added cost.
+The V2 hook now also runs for `generate`. The one-shot prompt and any instruction-update
+system message have no history entry, so projection passes them through unchanged and
+the warming plugin still recognizes its own pings. `generate` creates no new nudge
+anchors, does not expose message refs, and does not consume a pending `/dcp compress`
+trigger. `tests/parity.test.ts` checks that `generate` renders history and system
+exactly like `context`.
+
 ## Checks
 
 Run from the vendored copy in the dotfiles repo:

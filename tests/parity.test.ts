@@ -324,6 +324,26 @@ test("compaction preserves prepopulated maxTokens, checkpoint and retained-tail 
     app.dispose?.()
 })
 
+test("generate renders history like context and passes the one-shot prompt through untouched", async () => {
+    const app = await runtime()
+    const id = "runtime-generate"
+    app.histories[id] = [entry("first"), entry("second")]
+    const context = app.event(id, ["first", "second"])
+    await app.hooks.context(context)
+    const refs = (await loadSessionState(id, logger))?.messageIds?.byRawId
+    const update = { role: "system", content: [{ type: "text", text: "Instruction update" }] }
+    const ping = { role: "user", content: [{ type: "text", text: "Reply with exactly: OK" }] }
+    const generate = app.event(id, ["first", "second"])
+    generate.messages.push(structuredClone(update), structuredClone(ping))
+    await app.hooks.generate(generate)
+    expect(generate.messages.slice(0, -2)).toEqual(context.messages)
+    expect(generate.messages.at(-2)).toEqual(update)
+    expect(generate.messages.at(-1)).toEqual(ping)
+    expect(generate.system).toEqual(context.system)
+    expect((await loadSessionState(id, logger))?.messageIds?.byRawId).toEqual(refs)
+    app.dispose?.()
+})
+
 test("2.0.21 media assets keep their native payload and provider metadata", async () => {
     const { Media } = await import("@opencode/ai/media")
     const { project } = await import("../lib/v2/messages")
