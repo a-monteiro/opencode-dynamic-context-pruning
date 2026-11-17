@@ -184,7 +184,7 @@ export async function setup(ctx: Plugin.Context) {
         for (const model of editor.list())
             limits.set(`${model.providerID}/${model.id}`, model.limit.context)
     })
-    for (const kind of ["context", "compaction"] as const)
+    for (const kind of ["context", "compaction", "generate"] as const)
         await ctx.session.hook(kind, (event) =>
             serial(event.sessionID, async () => {
                 const { state, entries, session, messages } = await load(
@@ -233,7 +233,8 @@ export async function setup(ctx: Plugin.Context) {
                     true,
                 )
                 injectMessageIds(state, config, view.messages, priorities)
-                applyPendingManualTrigger(state, view.messages, logger)
+                // One-shot generations (warming, /btw) must not consume a /dcp compress trigger meant for the next real turn.
+                if (kind !== "generate") applyPendingManualTrigger(state, view.messages, logger)
                 event.messages = view.restore()
                 await saveSessionState(state, logger)
                 const system = { system: event.system.map((part) => part.text) }
