@@ -37,6 +37,7 @@ export interface CompressConfig {
     protectedTools: string[]
     protectTags: boolean
     protectUserMessages: boolean
+    minRangeTokens: number
 }
 
 export interface Commands {
@@ -136,6 +137,7 @@ export const VALID_CONFIG_KEYS = new Set([
     "compress.protectedTools",
     "compress.protectTags",
     "compress.protectUserMessages",
+    "compress.minRangeTokens",
     "strategies",
     "strategies.deduplication",
     "strategies.deduplication.enabled",
@@ -454,6 +456,28 @@ export function validateConfigTypes(config: Record<string, any>): ValidationErro
             }
 
             if (
+                compress.minRangeTokens !== undefined &&
+                typeof compress.minRangeTokens !== "number"
+            ) {
+                errors.push({
+                    key: "compress.minRangeTokens",
+                    expected: "non-negative integer",
+                    actual: typeof compress.minRangeTokens,
+                })
+            }
+
+            if (
+                typeof compress.minRangeTokens === "number" &&
+                (!Number.isInteger(compress.minRangeTokens) || compress.minRangeTokens < 0)
+            ) {
+                errors.push({
+                    key: "compress.minRangeTokens",
+                    expected: "non-negative integer",
+                    actual: `${compress.minRangeTokens} (will be treated as 0)`,
+                })
+            }
+
+            if (
                 typeof compress.iterationNudgeThreshold === "number" &&
                 compress.iterationNudgeThreshold < 1
             ) {
@@ -699,6 +723,7 @@ const defaultConfig: PluginConfig = {
         protectedTools: [...COMPRESS_DEFAULT_PROTECTED_TOOLS],
         protectTags: false,
         protectUserMessages: false,
+        minRangeTokens: 0,
     },
     strategies: {
         deduplication: {
@@ -865,6 +890,7 @@ function mergeCompress(
         protectedTools: [...new Set([...base.protectedTools, ...(override.protectedTools ?? [])])],
         protectTags: override.protectTags ?? base.protectTags,
         protectUserMessages: override.protectUserMessages ?? base.protectUserMessages,
+        minRangeTokens: override.minRangeTokens ?? base.minRangeTokens,
     }
 }
 

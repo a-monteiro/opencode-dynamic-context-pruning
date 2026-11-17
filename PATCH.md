@@ -47,6 +47,22 @@ into the reply as it streamed, and the model then saw them as part of its own
 output. The projection now carries the store's completion time, and nudge
 injection redirects a target that is still in progress to the last user message.
 
+## Minimum visible range size
+
+`compress.minRangeTokens` (default 0, off) rejects a range-mode batch before any
+state mutation when a selected range covers fewer visible tokens than the floor.
+The measurement counts only currently visible content: messages already active in
+a compression are skipped, pruned tool payloads are excluded, and each visible
+active summary is counted once through its `summaryTokens`. A malformed value is
+treated as 0 so a bad config cannot block every compression, and the whole batch
+is rejected with the measured tokens and floor so the model can widen across
+closed or stale history or skip; the model must not widen into active history
+purely to reach the floor.
+Active context-limit anchors bypass the floor so emergency compression still works.
+A vendored `dcp.schema.json` adds the property to the intact upstream schema, and
+`dcp.jsonc` points `$schema` at that file's local absolute path and enables
+`minRangeTokens: 20000`.
+
 ## Checks
 
 Run from the vendored copy in the dotfiles repo:

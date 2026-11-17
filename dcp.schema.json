@@ -247,6 +247,12 @@
                     "type": "boolean",
                     "default": false,
                     "description": "When enabled, your messages are never lost during compression"
+                },
+                "minRangeTokens": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0,
+                    "description": "Minimum visible tokens a selected range must cover before range-mode compression accepts it. 0 disables the floor. Rejects the whole batch when any range is smaller. Emergency context-limit compression bypasses the floor."
                 }
             },
             "default": {
@@ -261,7 +267,8 @@
                 "nudgeForce": "soft",
                 "protectedTools": [],
                 "protectTags": false,
-                "protectUserMessages": false
+                "protectUserMessages": false,
+                "minRangeTokens": 0
             }
         },
         "strategies": {

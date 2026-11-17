@@ -1,5 +1,7 @@
 import type { CompressionBlock, SessionState } from "../state"
 import { resolveAnchorMessageId, resolveBoundaryIds, resolveSelection } from "./search"
+import { isMessageCompacted } from "../state/utils"
+import { countVisibleMessageTokens } from "../token-utils"
 import type { IdFormat } from "../message-ids"
 import type {
     BoundaryReference,
@@ -8,6 +10,7 @@ import type {
     ParsedBlockPlaceholder,
     ResolvedRangeCompression,
     SearchContext,
+    SelectionResolution,
 } from "./types"
 
 const BLOCK_PLACEHOLDER_REGEX = /\(b(\d+)\)|\{block_(\d+)\}/gi
@@ -312,4 +315,60 @@ function injectBoundarySummary(
     consumedSeen.add(reference.blockId)
     consumed.push(reference.blockId)
     return next
+}
+
+export function measureSelectionVisibleTokens(
+    selection: SelectionResolution,
+    searchContext: SearchContext,
+    state: SessionState,
+): number {
+    let total = 0
+    for (const messageId of selection.messageIds) {
+        const message = searchContext.rawMessagesById.get(messageId)
+        if (!message || isMessageCompacted(state, message)) {
+            continue
+        }
+        total += countVisibleMessageTokens(state, message)
+    }
+
+    for (const blockId of selection.requiredBlockIds) {
+        total += searchContext.summaryByBlockId.get(blockId)?.summaryTokens ?? 0
+    }
+
+    return total
+}
+
+export function validateMinRangeTokens(
+    plans: ResolvedRangeCompression[],
+    searchContext: SearchContext,
+    state: SessionState,
+    configuredFloor: number,
+): void {
+    // A malformed value falls back to 0 so a bad config cannot block every compression.
+    const floor = Number.isInteger(configuredFloor) && configuredFloor > 0 ? configuredFloor : 0
+    if (floor <= 0 || state.nudges.contextLimitAnchors.size > 0) {
+        return
+    }
+
+    const issues: string[] = []
+    for (const plan of plans) {
+        const measured = measureSelectionVisibleTokens(plan.selection, searchContext, state)
+        if (measured < floor) {
+            issues.push(
+                `content[${plan.index}] (${plan.entry.startId}..${plan.entry.endId}) selects about ${measured} visible tokens, below compress.minRangeTokens (${floor}). Widen the range across closed or stale history to include more content, or skip this range; never widen into active history just to reach the floor.`,
+            )
+        }
+    }
+
+    if (issues.length === 0) {
+        return
+    }
+
+    if (issues.length === 1) {
+        throw new Error(issues[0])
+    }
+
+    throw new Error(
+        `compress.minRangeTokens (${floor}) rejected this batch:\n${issues.map((issue) => `- ${issue}`).join("\n")}`,
+    )
 }
