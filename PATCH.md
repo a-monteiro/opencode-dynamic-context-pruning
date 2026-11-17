@@ -1,8 +1,22 @@
-# DCP 3.2.0 V2 parity preparation
+# DCP 3.2.1 V2 parity preparation
 
-DCP 3.2.0 already isolates V2 session state and serializes operations per session.
+DCP 3.2.1 already isolates V2 session state and serializes operations per session.
 It does not persist message aliases or the native compaction epoch.
 This vendor patch adds those missing V1 protections without replacing the upstream V2 adapter.
+
+## Upstream sync to v3.2.1
+
+This fork is based on upstream v3.2.1 (`cade973`). The merge keeps upstream's
+tokenizer reuse, V2 compress `ask` support, V2 tool-result pairing by call part,
+failed-compaction filtering, and the rule that dcp-like text in tool outputs stays
+literal (#657). No fork patch became wholly redundant. Removing tool-output
+stripping makes the #614 guard in `appendToToolPart` defensive rather than
+load-bearing; the reply cleanup, persistence epoch, `minRangeTokens`, in-progress
+nudge guard, reminder cleanup, generate hook and Plan-mode retainer all still carry
+behaviour upstream v3.2.1 does not have.
+
+The V2 parity fixtures mark summary messages as `finish: "stop"` because v3.2.1
+intentionally ignores unfinished or failed native compactions.
 
 Persisted files add `messageIds.byRawId`, `messageIds.nextRef`, and `lastCompaction`.
 Loading rebuilds the inverse map, validates compact aliases, and keeps counters above restored aliases.
@@ -30,13 +44,12 @@ debris such as `<<`, a bare `<` or `<m0477` are also stripped (#562); the rule i
 anchored to the end of the reply and needs two or more bracket-only lines, so a
 lone bracket in prose, markdown or code is untouched.
 
-Upstream issue #614 is present in this vendored copy through completed tool parts.
-Injection appends the id tag to a tool output, and cleanup strips the tag but keeps
-the newline that precedes it. Re-appending without normalizing therefore adds one
-newline to every mid-conversation completed tool output on each request, so prior
-messages never stay byte-identical and the prompt prefix cache cannot hold.
-`appendToToolPart` now trims trailing newlines before appending, matching
-`appendToTextPart`. The streaming and compression-rebuild mechanisms named in #614
+Upstream v3.2.1 stopped stripping dcp-like text from tool outputs (#657), which
+removes the strip half of the #614 newline-growth loop: an injected tag that
+survives in history is now found by `appendToToolPart` and is not re-appended.
+The newline normalization added for #614 stays as a guard, so a tag appended to a
+completed output that ends in newlines cannot stack blank lines or change bytes
+between transforms. The streaming and compression-rebuild mechanisms named in #614
 did not reproduce here; text parts, XML refs and compact refs already round-trip.
 
 ## In-progress assistant messages

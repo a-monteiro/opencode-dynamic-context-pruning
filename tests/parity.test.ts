@@ -16,7 +16,14 @@ const { prepareSession } = await import("../lib/compress/pipeline")
 const { getConfig } = await import("../lib/config")
 const logger = { info() {}, warn() {}, error() {}, debug() {}, async saveContext() {} } as any
 const message = (id: string, summary = false, created = 1): any => ({
-    info: { sessionID: "session", id, role: summary ? "assistant" : "user", summary, time: { created } },
+    info: {
+        sessionID: "session",
+        id,
+        role: summary ? "assistant" : "user",
+        summary,
+        time: { created },
+        ...(summary ? { finish: "stop" } : {}),
+    },
     parts: [{ type: "text", text: id }],
 })
 const client: any = { session: { get: async () => ({ data: {} }), messages: async () => ({ data: [] }) } }
