@@ -13,7 +13,7 @@ import {
     collectTurnNudgeAnchors,
 } from "./utils"
 import { getLastUserMessage } from "../messages/query"
-import type { IdFormat } from "../message-ids"
+import { formatMessageRef, parseMessageRef, type IdFormat, MESSAGE_REF_MAX_INDEX } from "../message-ids"
 
 export const checkSession = async (
     client: any,
@@ -23,11 +23,10 @@ export const checkSession = async (
     manualModeDefault: boolean,
 ): Promise<void> => {
     const lastUserMessage = getLastUserMessage(messages)
-    if (!lastUserMessage) {
+    const lastSessionId = lastUserMessage?.info.sessionID ?? state.sessionId
+    if (!lastSessionId) {
         return
     }
-
-    const lastSessionId = lastUserMessage.info.sessionID
 
     if (state.sessionId === null || state.sessionId !== lastSessionId) {
         logger.info(`Session changed: ${state.sessionId} -> ${lastSessionId}`)
@@ -53,11 +52,7 @@ export const checkSession = async (
             timestamp: lastCompactionTimestamp,
         })
 
-        saveSessionState(state, logger).catch((error) => {
-            logger.warn("Failed to persist state reset after compaction", {
-                error: error instanceof Error ? error.message : String(error),
-            })
-        })
+        await saveSessionState(state, logger)
     }
 
     state.currentTurn = countTurns(state, messages)
@@ -171,6 +166,31 @@ export async function ensureSessionInitialized(
 
     if (typeof persisted.manualMode === "boolean") {
         state.manualMode = persisted.manualMode ? "active" : false
+    }
+
+    const persistedEpoch = Number.isFinite(persisted.lastCompaction) && persisted.lastCompaction! >= 0
+        ? persisted.lastCompaction! : 0
+    if (state.lastCompaction > persistedEpoch) {
+        await saveSessionState(state, logger)
+        return
+    }
+    state.lastCompaction = Math.max(state.lastCompaction, persistedEpoch)
+    if (persisted.messageIds && typeof persisted.messageIds.byRawId === "object") {
+        for (const [rawId, ref] of Object.entries(persisted.messageIds.byRawId ?? {})) {
+            if (typeof ref !== "string") continue
+            const index = parseMessageRef(ref, state.idFormat)
+            if (index === null || index >= Number.MAX_SAFE_INTEGER) continue
+            const canonical = formatMessageRef(index, state.idFormat)
+            if (state.messageIds.byRef.has(canonical)) continue
+            state.messageIds.byRawId.set(rawId, canonical)
+            state.messageIds.byRef.set(canonical, rawId)
+            state.messageIds.nextRef = Math.max(state.messageIds.nextRef, index + 1)
+        }
+        const maxCounter = state.idFormat === "compact" ? Number.MAX_SAFE_INTEGER : MESSAGE_REF_MAX_INDEX + 1
+        const counter = persisted.messageIds.nextRef
+        if (Number.isSafeInteger(counter) && counter >= 1 && counter <= maxCounter) {
+            state.messageIds.nextRef = Math.max(state.messageIds.nextRef, counter)
+        }
     }
 
     state.prune.tools = loadPruneMap(persisted.prune.tools)

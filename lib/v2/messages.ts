@@ -117,8 +117,8 @@ export function project(native: Message[], entries: History, session: Session) {
                     ...base,
                     id: `${message.id}:${index}`,
                     type: "file",
-                    mime: part.mediaType,
-                    url: typeof part.data === "string" ? part.data : "",
+                    mime: part.media.mediaType,
+                    url: part.media.source.type === "url" ? part.media.source.url : part.media.inline()?.dataUrl ?? "",
                 }
             if (part.type === "tool-call") {
                 const result = results.get(part.id)

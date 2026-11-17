@@ -34,6 +34,8 @@ export interface PersistedNudges {
 }
 
 export interface PersistedSessionState {
+    lastCompaction?: number
+    messageIds?: { byRawId: Record<string, string>; nextRef: number }
     sessionName?: string
     manualMode?: boolean
     prune: PersistedPrune
@@ -42,34 +44,45 @@ export interface PersistedSessionState {
     lastUpdated: string
 }
 
-const STORAGE_DIR = join(
-    process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"),
-    "opencode",
-    "storage",
-    "plugin",
-    "dcp",
-)
+// Resolved per call: tests and hosts can change the data home after import, and
+// a module-level constant would keep writing to the directory loaded first.
+const storageDir = () =>
+    join(
+        process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"),
+        "opencode",
+        "storage",
+        "plugin",
+        "dcp",
+    )
 
 async function ensureStorageDir(): Promise<void> {
-    if (!existsSync(STORAGE_DIR)) {
-        await fs.mkdir(STORAGE_DIR, { recursive: true })
+    if (!existsSync(storageDir())) {
+        await fs.mkdir(storageDir(), { recursive: true })
     }
 }
 
 function getSessionFilePath(sessionId: string): string {
-    return join(STORAGE_DIR, `${sessionId}.json`)
+    return join(storageDir(), `${sessionId}.json`)
 }
+
+const pendingWrites = new Map<string, Promise<void>>()
 
 async function writePersistedSessionState(
     sessionId: string,
     state: PersistedSessionState,
     logger: Logger,
 ): Promise<void> {
-    await ensureStorageDir()
-
-    const filePath = getSessionFilePath(sessionId)
     const content = JSON.stringify(state, null, 2)
-    await fs.writeFile(filePath, content, "utf-8")
+    const write = (pendingWrites.get(sessionId) ?? Promise.resolve()).catch(() => undefined).then(async () => {
+        await ensureStorageDir()
+        await fs.writeFile(getSessionFilePath(sessionId), content, "utf-8")
+    })
+    pendingWrites.set(sessionId, write)
+    try {
+        await write
+    } finally {
+        if (pendingWrites.get(sessionId) === write) pendingWrites.delete(sessionId)
+    }
 
     logger.info("Saved session state to disk", {
         sessionId,
@@ -88,6 +101,11 @@ export async function saveSessionState(
         }
 
         const state: PersistedSessionState = {
+            lastCompaction: sessionState.lastCompaction,
+            messageIds: {
+                byRawId: Object.fromEntries(sessionState.messageIds.byRawId),
+                nextRef: sessionState.messageIds.nextRef,
+            },
             sessionName: sessionName,
             manualMode: !!sessionState.manualMode,
             prune: {
@@ -117,6 +135,7 @@ export async function loadSessionState(
     logger: Logger,
 ): Promise<PersistedSessionState | null> {
     try {
+        await pendingWrites.get(sessionId)
         const filePath = getSessionFilePath(sessionId)
 
         if (!existsSync(filePath)) {
@@ -268,16 +287,16 @@ export async function loadAllSessionStats(logger: Logger): Promise<AggregatedSta
     }
 
     try {
-        if (!existsSync(STORAGE_DIR)) {
+        if (!existsSync(storageDir())) {
             return result
         }
 
-        const files = await fs.readdir(STORAGE_DIR)
+        const files = await fs.readdir(storageDir())
         const jsonFiles = files.filter((f) => f.endsWith(".json"))
 
         for (const file of jsonFiles) {
             try {
-                const filePath = join(STORAGE_DIR, file)
+                const filePath = join(storageDir(), file)
                 const content = await fs.readFile(filePath, "utf-8")
                 const state = JSON.parse(content) as PersistedSessionState
 

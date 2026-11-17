@@ -4,6 +4,23 @@ DCP 3.2.0 already isolates V2 session state and serializes operations per sessio
 It does not persist message aliases or the native compaction epoch.
 This vendor patch adds those missing V1 protections without replacing the upstream V2 adapter.
 
+Persisted files add `messageIds.byRawId`, `messageIds.nextRef`, and `lastCompaction`.
+Loading rebuilds the inverse map, validates compact aliases, and keeps counters above restored aliases.
+Legacy files still load. Compact counters can exceed the V1 XML limit of 9999.
+New native compaction discards stale aliases, compression blocks, tools, and nudges before restoring disk state.
+Compaction detection also works when history contains only a checkpoint.
+
+The V2 context hook saves aliases before returning the model-visible messages.
+Compression checks the epoch before V2 loading can reset state, then checks again after fetching tool history.
+Stale calls and retries fail until a fresh context hook exposes aliases.
+Empty alias maps also block compression after a restart, rather than allocating potentially misleading aliases from raw history.
+The upstream session queues remain intact. A separate disk queue preserves snapshot order and waits for writes before reads.
+
+OpenCode 2.0.21 changed native media parts to `Media.Asset`.
+The projection reads that asset's MIME type and inline data URL or remote URL without downloading it.
+Restoration retains the original media object and provider metadata.
+Compaction leaves `event.options`, including prepopulated `maxTokens`, unchanged.
+
 ## Checks
 
 Run from the vendored copy in the dotfiles repo:
