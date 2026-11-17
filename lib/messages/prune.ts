@@ -11,6 +11,21 @@ const PRUNED_TOOL_OUTPUT_REPLACEMENT =
     "[Output removed to save context - information superseded or no longer needed]"
 const PRUNED_TOOL_ERROR_INPUT_REPLACEMENT = "[input removed due to failed tool call]"
 const PRUNED_QUESTION_INPUT_REPLACEMENT = "[questions removed - see output for user's answers]"
+const PLAN_MODE_REMINDER_PREFIXES = [
+    "<system-reminder>\nYou are in Plan mode.",
+    "<system-reminder>\nYou are NO LONGER in Plan mode.",
+]
+
+// OpenCode persists Plan mode enter/exit reminders as single-text user messages
+// and only checks the latest one; dropping a later exit reminder while an earlier
+// enter reminder survives makes a Build session believe it is still in Plan mode.
+const isPlanModeReminder = (msg: WithParts): boolean => {
+    const part = msg.info.role === "user" && msg.parts.length === 1 ? msg.parts[0] : undefined
+    return (
+        part?.type === "text" &&
+        PLAN_MODE_REMINDER_PREFIXES.some((prefix) => part.text.startsWith(prefix))
+    )
+}
 
 export const prune = (
     state: SessionState,
@@ -230,7 +245,7 @@ const filterCompressedRanges = (
 
         // Skip messages that are in the prune list
         const pruneEntry = state.prune.messages.byMessageId.get(msgId)
-        if (pruneEntry && pruneEntry.activeBlockIds.length > 0) {
+        if (pruneEntry && pruneEntry.activeBlockIds.length > 0 && !isPlanModeReminder(msg)) {
             continue
         }
 
