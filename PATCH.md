@@ -114,6 +114,19 @@ buffering runs or info strings. Closing runs must use the same character, be at
 least as long as the opener, and end with only whitespace or a line boundary.
 Four-tick examples containing triple fences and closing-looking lines with suffixes stay literal.
 
+## Plan mode reminders survive compression
+
+OpenCode's `opencode.plan` plugin persists two reminders as single-text user
+messages: "You are in Plan mode" on entering Plan and "You are NO LONGER in Plan
+mode" on leaving it. The model only follows the latest one, and OpenCode does
+not re-add an exit reminder that DCP removed. A range that compressed the exit
+reminder but not an earlier enter reminder left a Build session reading
+"You are in Plan mode" as its newest mode instruction, and agents refused to act.
+`filterCompressedRanges` now keeps these reminder messages visible even inside an
+active compression block; matching requires a user message with exactly one text
+part that starts with the reminder's opening line, so quoted reminder text is
+still compressed. `tests/plan-mode-reminder.test.ts` covers both cases.
+
 ## One-shot generation hook
 
 OpenCode's built-in request plugins hook `context`, `compaction` and `generate` together.
