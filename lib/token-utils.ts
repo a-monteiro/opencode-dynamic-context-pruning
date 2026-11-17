@@ -162,3 +162,17 @@ export function countAllMessageTokens(msg: WithParts): number {
     if (texts.length === 0) return 0
     return estimateTokensBatch(texts)
 }
+
+export function countVisibleMessageTokens(state: SessionState, msg: WithParts): number {
+    const parts = Array.isArray(msg.parts) ? msg.parts : []
+    const texts: string[] = []
+    for (const part of parts) {
+        if (part.type === "text") {
+            texts.push(part.text)
+        } else if (part.type === "tool" && (!part.callID || !state.prune.tools.has(part.callID))) {
+            texts.push(...extractToolContent(part))
+        }
+    }
+    if (texts.length === 0) return 0
+    return estimateTokensBatch(texts)
+}
