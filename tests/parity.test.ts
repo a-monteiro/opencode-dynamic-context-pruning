@@ -116,6 +116,7 @@ const native = (id: string): any => ({ id, role: "user", content: [{ type: "text
 async function runtime() {
     const { default: plugin } = await import("../dist/index.js")
     const hooks: Record<string, (event: any) => Promise<void>> = {}
+    const hookOptions: Record<string, any> = {}
     const tools: Record<string, any> = {}
     const histories: Record<string, any[]> = {}
     let read: ((id: string) => Promise<void>) | undefined
@@ -124,7 +125,7 @@ async function runtime() {
         session: {
             get: async ({ sessionID }: any) => ({ id: sessionID, agent: "build", model: { providerID: "test", id: "model" } }),
             context: async ({ sessionID }: any) => { await read?.(sessionID); return histories[sessionID] ?? [] },
-            hook: async (kind: string, handler: any) => { hooks[kind] = handler },
+            hook: async (kind: string, handler: any, options?: any) => { hooks[kind] = handler; hookOptions[kind] = options },
         },
         agent: { get: async () => ({ data: { permissions: [] } }) },
         model: { transform: async (handler: any) => handler({ list: () => [{ providerID: "test", id: "model", limit: { context: 100000 } }] }) },
@@ -137,7 +138,7 @@ async function runtime() {
         sessionID: id, agent: "build", model: { providerID: "test", id: "model" },
         messages: ids.map(native), system: [{ type: "text", text: "Assistant" }], tools: { compress: {} }, options,
     })
-    return { hooks, tools, histories, event, dispose, setRead: (handler: typeof read) => { read = handler } }
+    return { hooks, hookOptions, tools, histories, event, dispose, setRead: (handler: typeof read) => { read = handler } }
 }
 
 test("built V2 entry persists model-visible refs across sessions and plugin restart", async () => {
@@ -225,6 +226,82 @@ test("upstream V2 queues serialize one session, allow another, and recover after
     app.dispose?.()
 })
 
+for (const kind of ["midline", "fence"]) {
+    test(`R1 built: oversize fallback preserves subsequent ${kind} literals`, async () => {
+        const app = await runtime()
+        const open = String.fromCharCode(60) + "dcp-system-reminder>"
+        const close = String.fromCharCode(60) + "/dcp-system-reminder>"
+        const frame = (delta: object) => `data: ${JSON.stringify({
+            object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }],
+        })}\n\n`
+        const before = kind === "midline" ? "Normal prose " : "````markdown\n"
+        const after = kind === "midline" ? `${open.slice(1)} literal\n` : `${open}\nquoted body\n${close}\n` + "````\n"
+        const tool = frame({ tool_calls: [{ index: 0, function: { name: "example", arguments: "x".repeat(300 * 1024) } }] })
+        const body = frame({ content: before }) + tool + frame({ content: after }) +
+            frame({ content: `${open}\nintentional passthrough\n${close}\n` }) + "data: [DONE]\n\n"
+        const event = {
+            sessionID: "oversized-frame", agent: "build", model: { providerID: "openrouter", id: "m" }, kind: "primary",
+            request: new Request("https://openrouter.ai/api/v1/chat/completions", { method: "POST" }),
+            response: new Response(body, { headers: { "content-type": "text/event-stream" } }),
+        }
+        await app.hooks["http.response"](event)
+        expect(await event.response.text() === body).toBe(true)
+        app.dispose?.()
+    })
+}
+
+test("built: CRLF frames around the pending cap complete for every chunk layout", async () => {
+    const app = await runtime()
+    const cap = 256 * 1024
+    const open = String.fromCharCode(60) + "dcp-system-reminder>"
+    const close = String.fromCharCode(60) + "/dcp-system-reminder>"
+    const frame = (delta: object, end = "\n\n") => `data: ${JSON.stringify({
+        object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: null }],
+    })}${end}`
+    const tool = (args: string) => frame({ tool_calls: [{ index: 0, function: { name: "example", arguments: args } }] }, "\r\n\r\n")
+    const encoder = new TextEncoder()
+    const content = (text: string) => {
+        let out = ""
+        for (const event of text.split("\n\n")) if (event.startsWith("data: {")) {
+            const parsed = JSON.parse(event.slice(6))
+            for (const choice of parsed.choices ?? []) if (typeof choice.delta?.content === "string") out += choice.delta.content
+        }
+        return out
+    }
+    for (const delta of [-1, 0, 1, 2]) {
+        const toolFrame = tool("x".repeat(cap + delta - tool("").length))
+        expect(encoder.encode(toolFrame).length).toBe(cap + delta)
+        const head = frame({ content: "start\n" + open.slice(0, 4) })
+        const later = `\nkeep\n${open}\nbody\n${close}\nafter`
+        const body = head + toolFrame + frame({ content: later }) + "data: [DONE]\n\n"
+        const bytes = encoder.encode(body)
+        const split = encoder.encode(head).length + cap + delta - 1
+        const layouts = [[bytes], [bytes.subarray(0, split), bytes.subarray(split)], [] as Uint8Array[]]
+        for (let offset = 0; offset < bytes.length; offset += 4096) layouts[2]!.push(bytes.subarray(offset, offset + 4096))
+        for (const pieces of layouts) {
+            const event = {
+                sessionID: "crlf-cap", agent: "build", model: { providerID: "openrouter", id: "m" }, kind: "primary",
+                request: new Request("https://openrouter.ai/api/v1/chat/completions", { method: "POST" }),
+                response: new Response(new ReadableStream<Uint8Array>({ start(controller) {
+                    for (const piece of pieces) controller.enqueue(piece)
+                    controller.close()
+                } }), { headers: { "content-type": "text/event-stream" } }),
+            }
+            await app.hooks["http.response"](event)
+            const text = await event.response.text()
+            expect(text.split(toolFrame).length).toBe(2)
+            if (delta > 0) {
+                expect(text.endsWith(toolFrame + frame({ content: later }) + "data: [DONE]\n\n")).toBe(true)
+                expect(content(text.replaceAll("\r\n", "\n"))).toBe("start\n" + open.slice(0, 4) + later)
+            } else {
+                expect(content(text.replaceAll("\r\n", "\n"))).not.toContain(open)
+                expect(content(text.replaceAll("\r\n", "\n"))).toContain("after")
+            }
+        }
+    }
+    app.dispose?.()
+})
+
 test("compaction preserves prepopulated maxTokens, checkpoint and retained-tail origins", async () => {
     const app = await runtime()
     const id = "runtime-compaction"
@@ -260,3 +337,116 @@ test("2.0.21 media assets keep their native payload and provider metadata", asyn
     expect(JSON.stringify(view.restore())).toContain('"keep":true')
 })
 
+test("V2 context hook strips an echoed reminder from assistant history", async () => {
+    const app = await runtime()
+    const LT = String.fromCharCode(60)
+    const GT = String.fromCharCode(62)
+    const open = `${LT}dcp-system-reminder${GT}`
+    const close = `${LT}/dcp-system-reminder${GT}`
+    const sentence = "If your subagent-related conversation needs to be compressed"
+    const reminder = `${open}\n${sentence}\n${sentence}\n${close}\n`
+    const id = "runtime-reminder"
+    app.histories[id] = [
+        { id: "u1", type: "user", text: "user prompt", time: { created: 100 } },
+        {
+            id: "a1",
+            type: "assistant",
+            agent: "build",
+            model: { id: "model", providerID: "test" },
+            content: [{ type: "text", text: `Here is my answer.\n${reminder}` }],
+            time: { created: 200, completed: 300 },
+        },
+    ]
+    const event: any = {
+        sessionID: id,
+        agent: "build",
+        model: { providerID: "test", id: "model" },
+        messages: [
+            { id: "u1", role: "user", content: [{ type: "text", text: "user prompt" }] },
+            {
+                id: "a1",
+                role: "assistant",
+                content: [{ type: "text", text: `Here is my answer.\n${reminder}` }],
+            },
+        ],
+        system: [{ type: "text", text: "Assistant" }],
+        tools: { compress: {} },
+        options: {},
+    }
+    await app.hooks.context(event)
+    const assistant = event.messages.find((message: any) => message.id === "a1")
+    const user = event.messages.find((message: any) => message.id === "u1")
+    expect(assistant.content[0].text.startsWith("Here is my answer.")).toBe(true)
+    expect(user.content[0].text.startsWith("user prompt")).toBe(true)
+    expect(JSON.stringify(event.messages)).not.toContain(sentence)
+    expect(app.hookOptions["http.response"]?.providerID).toBe("openrouter")
+
+    const sse = (body: string) =>
+        new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } })
+    const compactionEvent: any = {
+        sessionID: id,
+        agent: "build",
+        model: { providerID: "openrouter", modelID: "m" },
+        kind: "compaction",
+        request: new Request("https://openrouter.ai/api/v1/chat/completions", { method: "POST" }),
+        response: sse("data: {}\n\n"),
+    }
+    const compactionResponse = compactionEvent.response
+    await app.hooks["http.response"](compactionEvent)
+    expect(compactionEvent.response).toBe(compactionResponse)
+
+    const primaryEvent: any = {
+        sessionID: id,
+        agent: "build",
+        model: { providerID: "openrouter", modelID: "m" },
+        kind: "primary",
+        request: new Request("https://openrouter.ai/api/v1/chat/completions", { method: "POST" }),
+        response: sse(
+            `data: ${JSON.stringify({
+                id: "c",
+                object: "chat.completion.chunk",
+                choices: [
+                    {
+                        index: 0,
+                        delta: { content: `a\n${open}\n${sentence}\n${close}\n` },
+                        finish_reason: null,
+                    },
+                ],
+            })}\n\ndata: [DONE]\n\n`,
+        ),
+    }
+    await app.hooks["http.response"](primaryEvent)
+    expect(primaryEvent.response).not.toBe(compactionResponse)
+    const streamed = await primaryEvent.response.text()
+    expect(streamed).not.toContain(sentence)
+    expect(streamed).toContain('"content":"a\\n"')
+
+    const payload = (content: string, object = "chat.completion.chunk", role?: string) =>
+        `data: ${JSON.stringify({ object, choices: [{ index: 0, delta: { content, role }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`
+    for (const [method, path, providerID, kind] of [
+        ["GET", "/api/v1/chat/completions", "openrouter", "primary"],
+        ["POST", "/api/v1/responses", "openrouter", "primary"],
+        ["POST", "/api/v1/chat/completions", "other", "primary"],
+        ["POST", "/api/v1/chat/completions", "openrouter", "title"],
+        ["POST", "/api/v1/chat/completions", "openrouter", "generate"],
+    ]) {
+        const response = sse(payload(reminder))
+        const routed = { ...primaryEvent, model: { providerID, id: "m" }, kind,
+            request: new Request(`https://openrouter.ai${path}`, { method }), response }
+        await app.hooks["http.response"](routed)
+        expect(routed.response).toBe(response)
+        expect(await response.text()).toBe(payload(reminder))
+    }
+    for (const body of [
+        payload(reminder, "audit.record"),
+        `event: response.audit\n${payload(reminder)}`,
+        payload(reminder, "chat.completion.chunk", "user"),
+        payload("````markdown\n```\n" + reminder + "```\n````\n"),
+        payload("hello\nd"),
+    ]) {
+        const routed = { ...primaryEvent, response: sse(body) }
+        await app.hooks["http.response"](routed)
+        expect(await routed.response.text()).toBe(body)
+    }
+    app.dispose?.()
+})

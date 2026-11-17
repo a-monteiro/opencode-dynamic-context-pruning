@@ -63,6 +63,57 @@ A vendored `dcp.schema.json` adds the property to the intact upstream schema, an
 `dcp.jsonc` points `$schema` at that file's local absolute path and enables
 `minRangeTokens: 20000`.
 
+## Reminder suppression in assistant text and the reply stream
+
+Models sometimes echo a whole DCP nudge back into a reply. The nudges are wrapped
+in `dcp-system-reminder` tags, and the opening tag is occasionally echoed without
+its leading `<`. The generic cleaner stripped the marker tags but kept the
+reminder body, so the echoed body re-entered history and fed forward on later
+requests. `lib/v2/reminder-cleanup.ts` adds a small line-oriented state machine
+that drops a complete block from an opening marker at line start (optional
+indentation, either case, with or without the leading `<`) through the matching
+closing marker, drops an unclosed opener's tail at end of input, and keeps the
+prose before and after. Markers embedded midline, stray closers and fenced examples
+stay literal. Incomplete opener prefixes also stay literal at finish or EOF;
+suppression starts only after a complete opener. Marker inspection retains the
+existing 32-character indentation limit, so no reminder body or arbitrary line is buffered.
+`stripReminderBlocksFromMessages` applies it to assistant text parts only, before
+the existing generic cleaner in the V2 context/compaction hook; user text, tool
+output and stored history are untouched, and repeated transforms are stable.
+
+`lib/v2/sse-reminder.ts` wraps only primary OpenRouter POST requests whose pathname
+ends with `/chat/completions`. Responses must be successful, have a body and use
+`text/event-stream`; other requests retain their original Response object.
+The wrapper recognizes only `chat.completion.chunk` envelopes and default/message
+SSE events. Unknown protocols, named events, malformed data and errors pass unchanged.
+It filters assistant `choices[*].delta.content` independently per choice and tracks
+explicit roles across chunks. Non-assistant content, reasoning and tool calls stay literal.
+
+The byte scanner handles LF, CRLF and CR boundaries without rescanning buffered data.
+UTF-8 decoding happens only after a frame is assembled. Unchanged frames retain
+their original bytes. Changed frames replace only data payloads, preserving all
+other SSE lines and delimiters. Multiple data lines join before JSON parsing.
+Finish flushes append after filtered text in the same choice's writable content field.
+Otherwise, pending prose becomes a synthetic chunk before the terminal frame, or at EOF.
+Incomplete opener prefixes always flush unchanged; recognized unclosed reminders do not.
+
+Frame inspection stops at 256 KiB. Once any SSE frame exceeds 256 KiB, streaming
+cleanup passes through the remainder of that response losslessly and incrementally.
+An opaque frame makes line, fence and role state unknown, so sanitation never resumes
+in that response. Pending ordinary prefixes flush once, in order, before passthrough.
+This fallback can expose reminders in the oversized frame and all later frames;
+it never truncates tool arguments. History cleanup remains unchanged.
+The pending inspection buffer stays bounded, excluding the upstream chunk already received.
+The TransformStream propagates cancellation, upstream errors and backpressure without
+reading the whole response. Rewritten responses keep status and headers except stale
+`content-length` and `content-encoding`. No request body is read and no request data is logged.
+
+Fence tracking counts the full opening run of at least three backticks or tildes
+after at most three spaces. It emits delimiter characters while counting, without
+buffering runs or info strings. Closing runs must use the same character, be at
+least as long as the opener, and end with only whitespace or a line boundary.
+Four-tick examples containing triple fences and closing-looking lines with suffixes stay literal.
+
 ## Checks
 
 Run from the vendored copy in the dotfiles repo:
